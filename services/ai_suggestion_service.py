@@ -1,0 +1,2 @@
+class AISuggestionService:
+    pass
