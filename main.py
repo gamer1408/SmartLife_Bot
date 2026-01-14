@@ -30,76 +30,110 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("list"))
 async def cmd_list(message: types.Message):
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
-    builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
-    builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
+    now = datetime.now()
     
-    await message.answer("🗓 Qaysi kun rejalari kerak?", reply_markup=builder.as_markup())
+    # Bugundan boshlab kelgusi 15 kun uchun tugmalar
+    for i in range(15):
+        day = now + timedelta(days=i)
+        date_str = day.strftime("%Y-%m-%d")
+        
+        # Tugma yorlig'ini chiroyli qilish
+        if i == 0: label = "Bugun"
+        elif i == 1: label = "Ertaga"
+        else: label = day.strftime("%d-%b") # Masalan: 15-Jan
+        
+        builder.button(text=f"📅 {label}", callback_data=f"list_{date_str}")
+    
+    builder.adjust(3) # Tugmalarni 3 qatordan terish
+    await message.answer("🗓 Qaysi kun rejalarini ko'rmoqchisiz?", reply_markup=builder.as_markup())
 
+
+# 1. Vazifalar va Missiyalarni ajratilgan bitta hisobotda ko'rsatish
 @dp.callback_query(F.data.startswith("list_"))
 async def process_list_callback(callback: types.CallbackQuery):
-    today = datetime.now()
-    if callback.data == "list_today":
-        target, label = today, "Bugun"
-    elif callback.data == "list_tomorrow":
-        target, label = today + timedelta(days=1), "Ertaga"
-    else:
-        target, label = today + timedelta(days=2), "Indinga"
-        
-    date_str = target.strftime("%Y-%m-%d")
+    date_str = callback.data.split("_")[1]
     events = google_service.get_events_for_date(date_str)
     
     builder = InlineKeyboardBuilder()
     
     if not events:
         builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
-        await callback.message.edit_text(f"📅 {label} ({date_str}) uchun reja yo'q.", reply_markup=builder.as_markup())
+        await callback.message.edit_text(f"📅 {date_str} kuni uchun hech qanday reja topilmadi.", reply_markup=builder.as_markup())
         return
 
-    # Vazifalarni saralash va matn tayyorlash
-    timed_events = []
-    all_day_events = []
+    timed_tasks = []    # Vaqtli vazifalar
+    daily_missions = [] # Kunlik missiyalar (vaqtsiz)
     
     for event in events:
         summary = event.get('summary', 'Vazifa')
         event_id = event['id']
         start = event['start'].get('dateTime', event['start'].get('date'))
         
-        # Ro'yxat uchun matn yig'ish
-        if 'T' in start:
-            time_part = start.split('T')[1][:5]
-            timed_events.append(f"🕒 {time_part} — {summary}")
-        else:
-            all_day_events.append(f"📋 {summary}")
-        
-        # Har bir vazifa uchun O'CHIRISH tugmasini qo'shish
+        # O'chirish tugmasiga ID va joriy sanani birga biriktiramiz
         builder.row(types.InlineKeyboardButton(
             text=f"❌ {summary[:20]}...", 
-            callback_data=f"del_{event_id}")
+            callback_data=f"del_{event_id}_{date_str}")
         )
+        
+        # Vaqtli vazifa yoki Missiyani 'T' harfi orqali ajratamiz
+        if 'T' in start:
+            time_part = start.split('T')[1][:5] 
+            timed_tasks.append(f"🕒 {time_part} — {summary}")
+        else:
+            daily_missions.append(f"📌 {summary}")
 
-    # Yakuniy xabarni shakllantirish
-    res = f"📅 **{label} ({date_str}) rejalari:**\n\n"
-    if timed_events:
-        res += "⌛ **Vaqtli vazifalar:**\n" + "\n".join(timed_events) + "\n\n"
-    if all_day_events:
-        res += "📌 **Kunlik missiyalar:**\n" + "\n".join(all_day_events)
+    # Yagona va tushunarli hisobot shakllantirish
+    res = f"📅 **{date_str} rejalar hisoboti:**\n\n"
+    
+    if timed_tasks:
+        res += "⌛ **VAQTLI VAZIFALAR:**\n" + "\n".join(timed_tasks) + "\n\n"
+    else:
+        res += "⌛ **VAQTLI VAZIFALAR:**\n(Bo'sh)\n\n"
+    
+    if daily_missions:
+        res += "📋 **KUNLIK MISSIYALAR (Vaqtsiz):**\n" + "\n".join(daily_missions)
+    else:
+        res += "📋 **KUNLIK MISSIYALAR:**\n(Bo'sh)"
 
     builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
-    
-    # MUHIM: Faqat bir marta edit_text qilamiz va tugmalarni (reply_markup) ham qo'shamiz
     await callback.message.edit_text(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
     await callback.answer()
 
-# 3. Orqaga qaytish tugmasi
+# 2. Vazifa o'chirilgandan so'ng darhol o'sha kunni refresh qilish
+@dp.callback_query(F.data.startswith("del_"))
+async def delete_event_handler(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    event_id = parts[1]
+    current_date = parts[2] # Sanani saqlab qolamiz
+    
+    try:
+        google_service.delete_event(event_id)
+        await callback.answer("✅ Vazifa muvaffaqiyatli o'chirildi")
+        
+        # Eski menyuga qaytmasdan, o'sha kunning ro'yxatini qayta yuklaymiz
+        callback.data = f"list_{current_date}"
+        await process_list_callback(callback)
+        
+    except Exception as e:
+        print(f"O'chirish xatosi: {e}")
+        await callback.answer("❌ O'chirishda xato yuz berdi", show_alert=True)
+
 @dp.callback_query(F.data == "back_to_list")
 async def back_to_list_menu(callback: types.CallbackQuery):
+    # cmd_list funksiyasidagi mantiqni edit_text orqali qaytaramiz
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
-    builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
-    builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
+    now = datetime.now()
+    for i in range(15):
+        day = now + timedelta(days=i)
+        date_str = day.strftime("%Y-%m-%d")
+        label = "Bugun" if i == 0 else "Ertaga" if i == 1 else day.strftime("%d-%b")
+        builder.button(text=f"📅 {label}", callback_data=f"list_{date_str}")
+    
+    builder.adjust(3)
     await callback.message.edit_text("🗓 Qaysi kun rejalari kerak?", reply_markup=builder.as_markup())
     await callback.answer()
+
+
 
 async def check_calendar_reminders():
     global sent_reminders
@@ -128,34 +162,8 @@ async def check_calendar_reminders():
     if len(sent_reminders) > 100:
         sent_reminders.clear()
 
-@dp.callback_query(F.data.startswith("del_"))
-async def delete_event_handler(callback: types.CallbackQuery):
-    # Callback data format: del_eventid_daytype (masalan: del_123_today)
-    parts = callback.data.split("_")
-    event_id = parts[1]
-    
-    # 1. Google Calendar'dan o'chirish
-    try:
-        google_service.delete_event(event_id)
-        await callback.answer("✅ Vazifa o'chirildi", show_alert=False)
-        
-        # 2. Ro'yxatni yangilash uchun foydalanuvchini asosiy menyuga qaytaramiz
-        # Bu eng xavfsiz yo'l, chunki ro'yxat keshdan emas, qaytadan olinadi
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
-        builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
-        builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
-        
-        await callback.message.edit_text(
-            "🗑 Vazifa o'chirildi! Yangi ro'yxatni ko'rish uchun kunni tanlang:", 
-            reply_markup=builder.as_markup()
-        )
-        
-    except Exception as e:
-        print(f"Delete Error: {e}")
-        await callback.answer("❌ O'chirishda xatolik yuz berdi", show_alert=True)
 
-   
+
 @dp.message(Command("ideas"))
 async def list_ideas(message: types.Message):
     from database import get_ideas

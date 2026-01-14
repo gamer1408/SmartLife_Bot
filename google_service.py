@@ -23,7 +23,7 @@ def get_calendar_service():
 def get_events_for_date(target_date):
     service = get_calendar_service()
     
-    # Berilgan kunning boshi (00:00:00) va oxiri (23:59:59)
+    # Kunlik missiyalarni aniq topish uchun vaqt oralig'ini to'g'irlaymiz
     time_min = f"{target_date}T00:00:00Z"
     time_max = f"{target_date}T23:59:59Z"
     
@@ -37,6 +37,7 @@ def get_events_for_date(target_date):
     
     return events_result.get('items', [])
 
+    
 def add_event(summary, date_str, time_str, description=""):
     service = get_calendar_service()
     
