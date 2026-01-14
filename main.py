@@ -1,322 +1,374 @@
-"""
-SmartLife Bot - Main Entry Point
-UPDATED VERSION - With Task Management (Phase 2)
-"""
-
-import logging
+import asyncio
 import os
-from turtledemo.forest import start
-
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-
-from config import Config
-from database import db_manager
-from handlers.task_handler import TaskHandler, get_task_conversation_handler
-from utils.keyboards import get_main_menu_keyboard
-from services.voice_service import VoiceService
-from config import Config
-from database.db_manager import DatabaseManager
-from handlers.start_handler import StartHandler
-from handlers.calendar_handler import CalendarHandler
-from handlers.notes_handler import NotesHandler
-from handlers.analytics_handler import AnalyticsHandler
-from handlers.mood_handler import MoodHandler
-from handlers.premium_handler import PremiumHandler
-
-load_dotenv()
-
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO if os.getenv('DEBUG') != 'True' else logging.DEBUG
-)
-logger = logging.getLogger(__name__)
-voice_service = VoiceService()
-notes_handler = NotesHandler(db_manager, voice_service)
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from config import BOT_TOKEN
+import processor
+import google_service
+from database import init_db, save_idea, get_all_ideas
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from datetime import datetime, timedelta
 
 
-class SmartLifeBot:
-    def __init__(self):
-        """Initialize bot with configuration and database"""
-        print("\n" + "="*50)
-        print("🤖 SmartLife Bot - Starting...")
-        print("="*50)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+USER_ID = "6150118850"
+sent_reminders = set()
 
-        # Load configuration
-        self.config = Config()
-        self.config.print_config()
+# 1. Bot ishga tushganda bazani tayyorlash
+init_db()
 
-        # Initialize database
-        print("\n📦 Initializing database...")
-        self.db_manager = DatabaseManager(self.config.DATABASE_PATH)
-        print("✅ Database initialized successfully!")
+# 2. START buyrug'i (Eng tepada bo'lishi shart)
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer("Assalomu alaykum! Men aqlli yordamchiman.\n\n"
+                         "✍️ Vazifa qo'shish: `vazifa: Nom, YYYY-MM-DD, HH:MM`\n"
+                         "💡 G'oya qo'shish: Shunchaki matn yozing\n"
+                         "📂 G'oyalarni ko'rish: /ideas")
 
-        # Initialize handlers
-        self.start_handler = StartHandler(self.db_manager)
-        self.task_handler, self.task_conv_handler = get_task_conversation_handler(self.db_manager)
+@dp.message(Command("list"))
+async def cmd_list(message: types.Message):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
+    builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
+    builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
+    
+    await message.answer("🗓 Qaysi kun rejalari kerak?", reply_markup=builder.as_markup())
 
-        # Create application
-        self.application = Application.builder().token(self.config.TELEGRAM_TOKEN).build()
-
-        # Register all handlers
-        self._register_handlers()
-
-        print("\n✅ SmartLife Bot is ready!")
-        print("="*50)
-
-    def _register_handlers(self):
-        """Register all command and message handlers"""
-
-        # === BASIC COMMANDS ===
-        self.application.add_handler(CommandHandler("start", self.start_handler.start_command))
-        self.application.add_handler(CommandHandler("help", self.start_handler.help_command))
-        self.application.add_handler(CommandHandler("stats", self.start_handler.stats_command))
-        self.application.add_handler(CommandHandler("settings", self.start_handler.settings_command))
-        self.application.add_handler(CommandHandler("premium", self.start_handler.premium_command))
-
-        # === TASK MANAGEMENT (Phase 2) ===
-        # Add Task - Conversation Handler
-        self.application.add_handler(self.task_conv_handler)
-
-        # View Tasks
-        self.application.add_handler(CommandHandler("tasks", self.task_handler.view_tasks))
-
-        # Complete Task
-        self.application.add_handler(CommandHandler("complete", self.task_handler.complete_task))
-
-        # Delete Task
-        self.application.add_handler(CommandHandler("delete", self.task_handler.delete_task))
-
-        # Task Filter Callbacks
-        self.application.add_handler(
-            CallbackQueryHandler(self.task_handler.view_tasks, pattern='^filter_')
-        )
-
-        # Task Delete Confirmation
-        self.application.add_handler(
-            CallbackQueryHandler(self.task_handler.confirm_delete_task, pattern='^confirm_delete_|^cancel_delete')
-        )
-
-        # === MENU BUTTON HANDLERS ===
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^📝 Add Task$'),
-            self.task_handler.add_task_start
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^✅ View Tasks$'),
-            self.task_handler.view_tasks
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^📊 Analytics$'),
-            self._analytics_placeholder
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^📅 Calendar$'),
-            self._calendar_placeholder
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^💡 Notes$'),
-            self._notes_placeholder
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^⚙️ Settings$'),
-            self.start_handler.settings_command
-        ))
-
-        self.application.add_handler(MessageHandler(
-            filters.Regex('^⭐ Premium Features$'),
-            self.start_handler.premium_command
-        ))
-
-        # === CALLBACK HANDLERS ===
-        # Action callbacks
-        self.application.add_handler(
-            CallbackQueryHandler(self.task_handler.add_task_start, pattern='^action_addtask$')
-        )
-
-        # Back to menu
-        self.application.add_handler(
-            CallbackQueryHandler(self._back_to_menu, pattern='^back_to_menu$')
-        )
-
-        logger.info("✅ All handlers registered successfully!")
-
-    async def _analytics_placeholder(self, update, context):
-        """Placeholder for analytics feature (Phase 5)"""
-        await update.message.reply_text(
-            "📊 *Analytics Feature*\n\n"
-            "🚧 Coming in Phase 5!\n\n"
-            "This feature will show:\n"
-            "• Daily completion rate\n"
-            "• Category distribution\n"
-            "• Productivity streaks\n"
-            "• Peak hours analysis\n\n"
-            "Stay tuned! 🚀",
-            parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard()
-        )
-
-    async def _calendar_placeholder(self, update, context):
-        """Placeholder for calendar feature (Phase 3)"""
-        await update.message.reply_text(
-            "📅 *Calendar Integration*\n\n"
-            "🚧 Coming in Phase 3!\n\n"
-            "This feature will allow:\n"
-            "• Google Calendar sync\n"
-            "• Auto-schedule tasks\n"
-            "• Calendar notifications\n"
-            "• AI time slot suggestions\n\n"
-            "Stay tuned! 🚀",
-            parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard()
-        )
-
-    async def _notes_placeholder(self, update, context):
-        """Placeholder for notes feature (Phase 4)"""
-        await update.message.reply_text(
-            "💡 *Notes & Ideas*\n\n"
-            "🚧 Coming in Phase 4!\n\n"
-            "This feature will include:\n"
-            "• Quick note creation\n"
-            "• Voice-to-text notes\n"
-            "• Smart categorization\n"
-            "• Idea tagging system\n\n"
-            "Stay tuned! 🚀",
-            parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard()
-        )
-
-    async def _back_to_menu(self, update, context):
-        """Return to main menu"""
-        query = update.callback_query
-        await query.answer()
-
-        await query.edit_message_text(
-            "🏠 *Main Menu*\n\n"
-            "Select an option from the menu below:",
-            parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard()
-        )
-
-    def run(self):
-        """Start the bot"""
-        print("\n🚀 Starting bot polling...")
-        print("📱 Open Telegram and send /start to your bot\n")
-        print("Press Ctrl+C to stop the bot\n")
-
-        # Start polling
-        self.application.run_polling(allowed_updates=['message', 'callback_query'])
-
-
-def main():
-    """Start the bot"""
-
-    # Get bot token
-    token = Config.TELEGRAM_BOT_TOKEN
-    if not token:
-        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
+@dp.callback_query(F.data.startswith("list_"))
+async def process_list_callback(callback: types.CallbackQuery):
+    today = datetime.now()
+    if callback.data == "list_today":
+        target, label = today, "Bugun"
+    elif callback.data == "list_tomorrow":
+        target, label = today + timedelta(days=1), "Ertaga"
+    else:
+        target, label = today + timedelta(days=2), "Indinga"
+        
+    date_str = target.strftime("%Y-%m-%d")
+    events = google_service.get_events_for_date(date_str)
+    
+    builder = InlineKeyboardBuilder()
+    
+    if not events:
+        builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
+        await callback.message.edit_text(f"📅 {label} ({date_str}) uchun reja yo'q.", reply_markup=builder.as_markup())
         return
 
-    # Initialize database
-    db = DatabaseManager(Config.DATABASE_PATH)
+    # Vazifalarni saralash va matn tayyorlash
+    timed_events = []
+    all_day_events = []
+    
+    for event in events:
+        summary = event.get('summary', 'Vazifa')
+        event_id = event['id']
+        start = event['start'].get('dateTime', event['start'].get('date'))
+        
+        # Ro'yxat uchun matn yig'ish
+        if 'T' in start:
+            time_part = start.split('T')[1][:5]
+            timed_events.append(f"🕒 {time_part} — {summary}")
+        else:
+            all_day_events.append(f"📋 {summary}")
+        
+        # Har bir vazifa uchun O'CHIRISH tugmasini qo'shish
+        builder.row(types.InlineKeyboardButton(
+            text=f"❌ {summary[:20]}...", 
+            callback_data=f"del_{event_id}")
+        )
 
-    # Initialize handlers
-    start_handler = StartHandler(db)
-    task_handler = TaskHandler(db)
-    calendar_handler = CalendarHandler(db)
-    notes_handler = NotesHandler(db)
-    analytics_handler = AnalyticsHandler(db)
-    mood_handler = MoodHandler(db)  # NEW Phase 6
-    premium_handler = PremiumHandler(db)  # NEW Phase 6
+    # Yakuniy xabarni shakllantirish
+    res = f"📅 **{label} ({date_str}) rejalari:**\n\n"
+    if timed_events:
+        res += "⌛ **Vaqtli vazifalar:**\n" + "\n".join(timed_events) + "\n\n"
+    if all_day_events:
+        res += "📌 **Kunlik missiyalar:**\n" + "\n".join(all_day_events)
 
-    # Create application
-    app = Application.builder().token(token).build()
+    builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
+    
+    # MUHIM: Faqat bir marta edit_text qilamiz va tugmalarni (reply_markup) ham qo'shamiz
+    await callback.message.edit_text(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.answer()
 
-    # Register basic command handlers
-    app.add_handler(CommandHandler("start", start_handler.start))
-    app.add_handler(CommandHandler("help", start_handler.help_command))
-    app.add_handler(CommandHandler("stats", start_handler.stats))
-    app.add_handler(CommandHandler("settings", start_handler.settings))
-    app.add_handler(CommandHandler("premium", start_handler.premium))
+# 3. Orqaga qaytish tugmasi
+@dp.callback_query(F.data == "back_to_list")
+async def back_to_list_menu(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
+    builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
+    builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
+    await callback.message.edit_text("🗓 Qaysi kun rejalari kerak?", reply_markup=builder.as_markup())
+    await callback.answer()
 
-    # Register task handlers (Phase 2)
-    app.add_handler(task_handler.get_conversation_handler())
-    app.add_handler(CommandHandler("tasks", task_handler.view_tasks))
-    app.add_handler(CommandHandler("complete", task_handler.complete_task))
-    app.add_handler(CommandHandler("delete", task_handler.delete_task))
+async def check_calendar_reminders():
+    global sent_reminders
+    events = google_service.get_upcoming_events()
+    
+    now = datetime.now()
+    
+    for event in events:
+        event_id = event['id']
+        summary = event.get('summary')
+        start_str = event['start'].get('dateTime', event['start'].get('date'))
+        
+        # Google vaqtini Python vaqtiga o'tkazish
+        # Misol: 2026-01-10T22:30:00+05:00 -> datetime obyekti
+        start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00')).replace(tzinfo=None)
+        
+        # Agar vazifaga 2 daqiqadan kam vaqt qolgan bo'lsa VA hali xabar yuborilmagan bo'lsa
+        diff = (start_dt - now).total_seconds() / 60
+        
+        if 0 <= diff <= 5: # 5 daqiqa qolganda eslatish
+            if event_id not in sent_reminders:
+                await bot.send_message(USER_ID, f"⏰ **ESLATMA:**\n\n📌 {summary}\n🕒 Yaqin qoldi!")
+                sent_reminders.add(event_id)
+                
+    # Eskirgan ID larni tozalash (xotira to'lib ketmasligi uchun)
+    if len(sent_reminders) > 100:
+        sent_reminders.clear()
 
-    # Register calendar handlers (Phase 3)
-    app.add_handler(calendar_handler.get_conversation_handler())
-    app.add_handler(CommandHandler("disconnect_calendar", calendar_handler.disconnect_calendar))
-    app.add_handler(CommandHandler("sync", calendar_handler.sync_tasks))
-    app.add_handler(CommandHandler("schedule", calendar_handler.schedule_task))
-    app.add_handler(CommandHandler("calendar_view", calendar_handler.calendar_view))
+@dp.callback_query(F.data.startswith("del_"))
+async def delete_event_handler(callback: types.CallbackQuery):
+    # Callback data format: del_eventid_daytype (masalan: del_123_today)
+    parts = callback.data.split("_")
+    event_id = parts[1]
+    
+    # 1. Google Calendar'dan o'chirish
+    try:
+        google_service.delete_event(event_id)
+        await callback.answer("✅ Vazifa o'chirildi", show_alert=False)
+        
+        # 2. Ro'yxatni yangilash uchun foydalanuvchini asosiy menyuga qaytaramiz
+        # Bu eng xavfsiz yo'l, chunki ro'yxat keshdan emas, qaytadan olinadi
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="Bugun", callback_data="list_today"))
+        builder.row(types.InlineKeyboardButton(text="Ertaga", callback_data="list_tomorrow"))
+        builder.row(types.InlineKeyboardButton(text="Indinga", callback_data="list_after"))
+        
+        await callback.message.edit_text(
+            "🗑 Vazifa o'chirildi! Yangi ro'yxatni ko'rish uchun kunni tanlang:", 
+            reply_markup=builder.as_markup()
+        )
+        
+    except Exception as e:
+        print(f"Delete Error: {e}")
+        await callback.answer("❌ O'chirishda xatolik yuz berdi", show_alert=True)
 
-    # Register notes handlers (Phase 4)
-    app.add_handler(notes_handler.get_note_conversation_handler())
-    app.add_handler(CommandHandler("notes", notes_handler.view_notes))
-    app.add_handler(CommandHandler("viewnote", notes_handler.view_single_note))
-    app.add_handler(CommandHandler("deletenote", notes_handler.delete_note))
-    app.add_handler(CommandHandler("searchnotes", notes_handler.search_notes_cmd))
-    app.add_handler(CommandHandler("tags", notes_handler.list_tags))
-    app.add_handler(CommandHandler("categories", notes_handler.list_categories))
-    # Voice message handler
-    app.add_handler(MessageHandler(
-        filters.VOICE,
-        notes_handler.handle_voice_message
-    ))
+# 3. IDEAS buyrug'i (Matndan tepada bo'lishi shart)
+@dp.message(Command("ideas"))
+async def show_ideas(message: types.Message):
+    ideas = get_all_ideas()
+    if not ideas:
+        await message.answer("Hozircha g'oyalar yo'q.")
+        return
+    
+    response = "📝 **Sizning g'oyalaringiz:**\n\n"
+    for i, (content, cat) in enumerate(ideas, 1):
+        # Buyruqlarni bazadan chiqarib tashlash (agar adashib tushgan bo'lsa)
+        if content.startswith('/'): continue
+        response += f"{i}. {content} (_{cat}_)\n"
+    await message.answer(response, parse_mode="Markdown")
+    
+@dp.message(Command("ideas"))
+async def list_ideas(message: types.Message):
+    from database import get_ideas
+    ideas = get_ideas()
+    
+    if not ideas:
+        await message.answer("💡 Hozircha g'oyalar bazasi bo'sh.")
+        return
 
-    # Register analytics handlers (Phase 5)
-    app.add_handler(CommandHandler("analytics", analytics_handler.analytics_dashboard))
-    app.add_handler(CommandHandler("trends", analytics_handler.productivity_trends))
-    app.add_handler(CommandHandler("breakdown", analytics_handler.task_breakdown))
-    app.add_handler(CommandHandler("time", analytics_handler.time_analysis))
-    app.add_handler(CommandHandler("achievements", analytics_handler.view_achievements))
-    app.add_handler(CommandHandler("mood_insights", analytics_handler.mood_insights))
-    app.add_handler(CommandHandler("report", analytics_handler.generate_report))
-
-    # Register premium handlers (Phase 6) - NEW
-    app.add_handler(mood_handler.get_conversation_handler())
-    app.add_handler(CommandHandler("mood_history", mood_handler.view_mood_history))
-    app.add_handler(CommandHandler("suggest", premium_handler.suggest_task))
-    app.add_handler(CommandHandler("dailyplan", premium_handler.daily_plan))
-    app.add_handler(premium_handler.get_brainstorm_handler())
-
-    # Register callback query handler for inline keyboards
-    app.add_handler(task_handler.get_callback_handler())
-
-    # Register menu button handler
-    app.add_handler(MessageHandler(
-        filters.Regex('^(📝 Add Task|✅ View Tasks|📅 Calendar|💡 Notes|📊 Analytics|⚙️ Settings|⭐ Premium Features)$'),
-        start_handler.handle_menu_button
-    ))
-
-    # Start bot
-    logger.info("=" * 60)
-    logger.info("SmartLife Bot started successfully!")
-    logger.info("Phase 6: Premium Features - ACTIVE")
-    logger.info("=" * 60)
-    logger.info("Features available:")
-    logger.info("  ✅ Task Management (Phase 2)")
-    logger.info("  ✅ Calendar Integration (Phase 3)")
-    logger.info("  ✅ Notes & Voice (Phase 4)")
-    logger.info("  ✅ Analytics Dashboard (Phase 5)")
-    logger.info("  ✅ Mood Tracking (Phase 6)")
-    logger.info("  ✅ AI Task Suggestions (Phase 6)")
-    logger.info("  ✅ Brainstorm Assistant (Phase 6)")
-    logger.info("=" * 60)
-    logger.info("Press Ctrl+C to stop the bot")
-    logger.info("=" * 60)
-
-    app.run_polling(allowed_updates=['message', 'callback_query'])
+    builder = InlineKeyboardBuilder()
+    res = "💡 **Sizning barcha g'oyalaringiz:**\n\n"
+    
+    for idea in ideas:
+        # Bazadan kelgan tartib: 0:id, 1:content, 2:category, 3:date
+        idea_id = idea[0]
+        content = idea[1]
+        category = idea[2]
+        
+        # Ro'yxat matni (G'oyani to'liq ko'rsatamiz)
+        res += f"📌 **{category}**: {content}\n\n"
+        
+        # Har bir g'oya uchun o'chirish tugmasi
+        builder.row(types.InlineKeyboardButton(
+            text=f"🗑 O'chirish: {content[:15]}...", 
+            callback_data=f"delidea_{idea_id}")
+        )
+    
+    # DIQQAT: reply_markup tugmalarni Telegramga yuboradi
+    await message.answer(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 
-if __name__ == '__main__':
-    main()
+@dp.callback_query(F.data.startswith("delidea_"))
+async def process_delete_idea(callback: types.CallbackQuery):
+    idea_id = callback.data.split("_")[1]
+    
+    try:
+        from database import delete_idea
+        delete_idea(idea_id) # Bazadan o'chiradi
+        
+        await callback.answer("✅ G'oya o'chirildi")
+        
+        # Xabarni yangilab qo'yamiz
+        await callback.message.edit_text(
+            "🗑 G'oya o'chirildi! Yangilangan ro'yxatni ko'rish uchun qaytadan /ideas yozing."
+        )
+    except Exception as e:
+        print(f"O'chirishda xato: {e}")
+        await callback.answer("❌ O'chirishda xatolik yuz berdi")
+
+# 4. Ovozli xabarlar
+@dp.message(F.voice)
+async def handle_voice(message: types.Message):
+    # 1. Status xabari
+    status_msg = await message.answer("🎤 Ovoz eshitilmoqda...")
+    
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = f"{file_id}.ogg"
+    
+    try:
+        # 2. Faylni yuklab olish
+        await bot.download_file(file.file_path, file_path)
+        
+        # 3. Ovozni matnga o'girish (TEXT o'zgaruvchisi shu yerda yaratiladi)
+        await status_msg.edit_text("✍️ Matnga o'girilmoqda...")
+        text = processor.transcribe_voice(file_path) # <--- MUHIM
+        
+        # 4. AI orqali tahlil qilish
+        await status_msg.edit_text("🧠 Tahlil qilinmoqda...")
+        result = processor.process_text_with_ai(text)
+        
+        # 5. Vaqtni aniqlashtirish tekshiruvi
+        if result['type'] == 'task' and result['time'] == "NEED_CLARIFICATION":
+            await status_msg.edit_text(
+                f"🧐 Vazifani tushundim: **{result['content']}**\n\n"
+                "Lekin soat nechaligini bilolmadim. Iltimos, vaqtini ayta olasizmi?"
+            )
+            return
+
+        # 6. Vazifa yoki G'oya sifatida saqlash
+        if result['type'] == 'task':
+            google_service.add_event(result['content'], result['date'], result['time'])
+            await status_msg.edit_text(f"✅ Vazifa qo'shildi:\n📌 {result['content']}\n🕒 {result['date']} | {result['time']}")
+        else:
+            from database import save_idea
+            save_idea(result['content'], result['category'])
+            await status_msg.edit_text(f"💡 G'oya saqlandi:\n📌 {result['content']}")
+
+    except Exception as e:
+        print(f"Ovozli xabar xatosi: {e}")
+        await status_msg.edit_text("❌ Kechirasiz, ovozni qayta ishlashda xatolik yuz berdi.")
+    
+    finally:
+        # Faylni o'chirish
+        if os.path.exists(file_path):
+            os.remove(file_path)    # 1. Yuklanayotganini bildirish
+    status_msg = await message.answer("🎤 Ovozli xabar eshitilmoqda...")
+    result = processor.process_text_with_ai(text)
+    # 2. Ovozli faylni yuklab olish
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = f"{file_id}.ogg"
+    await bot.download_file(file.file_path, file_path)
+
+    if result['type'] == 'task':
+            if result['time'] == "NEED_CLARIFICATION":
+                await status_msg.edit_text(
+                    f"🧐 Vazifani tushundim: **{result['content']}**\n\n"
+                    "Lekin soat nechaligini anglay olmadim. Iltimos, vaqtini aniqroq ayta olasizmi? "
+                    "(Masalan: 'soat 10 da' yoki 'kechki 7 da')"
+                )
+                return # Calendar-ga qo'shmasdan to'xtatamiz
+            
+            # Agar hammasi aniq bo'lsa qo'shish
+            google_service.add_event(result['content'], result['date'], result['time'])
+            await status_msg.edit_text(
+                f"✅ Vazifa qo'shildi:\n📌 {result['content']}\n"
+                f"📅 {result['date']} | ⏰ {result['time']}"
+            )
+    
+    try:
+        # 3. Groq orqali ovozni matnga o'girish (Whisper)
+        await status_msg.edit_text("✍️ Matnga o'girilmoqda...")
+        text = processor.transcribe_voice(file_path)
+        
+        # 4. Groq orqali matnni tahlil qilish (Llama)
+        await status_msg.edit_text("🧠 Tahlil qilinmoqda...")
+        result = processor.process_text_with_ai(text)
+        
+        # 5. Natijaga qarab ish tutish
+        if result['type'] == 'task':
+            google_service.add_event(result['content'], result['date'], result['time'])
+            await status_msg.edit_text(
+                f"✅ Ovozli vazifa qo'shildi:\n📌 {result['content']}\n"
+                f"📅 {result['date']} | ⏰ {result['time']}"
+            )
+        else:
+            from database import save_idea
+            save_idea(result['content'], result['category'])
+            await status_msg.edit_text(f"💡 G'oya saqlandi:\n📌 {result['content']}")
+            
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Kechirasiz, tushunolmadim: {e}")
+    finally:
+        # Vaqtinchalik faylni o'chirish
+        if os.path.exists(file_path):
+            os.remove(file_path)    # Ovozli xabar mantiqi shu yerda qoladi...
+    # Hozircha OpenAI puli yo'qligi uchun xato berishi mumkin
+    await message.answer("Ovozli xizmat ertaga (to'lovdan so'ng) ishga tushadi.")
+
+# 5. MATNLI xabarlar (Eng pastda bo'lishi shart!)
+@dp.message(F.text & ~F.command)
+async def handle_text(message: types.Message):
+    user_input = message.text 
+    
+    try:
+        result = processor.process_text_with_ai(user_input)
+        
+        if result.get('type') == 'task':
+            content = result.get('content')
+            date_val = result.get('date')
+            time_val = result.get('time')
+            desc = result.get('description', "")
+
+            # Endi 4 ta argument yuboramiz, google_service uni qabul qiladi
+            google_service.add_event(content, date_val, time_val, desc)
+            
+            # Xabarni chiroyli chiqarish
+            time_msg = f"⏰ {time_val}" if time_val and time_val != "null" else "📅 Kun bo'yi (Missiya)"
+            desc_msg = f"\n📝 Tavsif: {desc}" if desc else ""
+            
+            await message.answer(
+                f"✅ Vazifa qo'shildi:\n📌 {content}\n"
+                f"🕒 {date_val} | {time_msg}{desc_msg}"
+            )
+        else:
+            from database import save_idea
+            save_idea(result['content'], result.get('category', 'General'))
+            await message.answer(f"💡 G'oya saqlandi:\n📌 {result['content']}")
+
+    except Exception as e:
+        print(f"Xato: {e}")
+        await message.answer("❌ Xabarni tahlil qilishda xatolik yuz berdi.")
+
+
+
+async def main():
+    scheduler = AsyncIOScheduler()
+    # Har 1 daqiqada tekshirish
+    scheduler.add_job(check_calendar_reminders, 'interval', minutes=1)
+    scheduler.start()
+    
+    print("Bot va Eslatmalar ishga tushdi...")
+    await dp.start_polling(bot)
+    try:
+        print("Bot ishga tushdi...")
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
