@@ -22,12 +22,21 @@ init_db()
 # 2. START buyrug'i (Eng tepada bo'lishi shart)
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer("Assalomu alaykum! Men aqlli yordamchiman.\n\n"
-                         "✍️ Vazifa qo'shish: `vazifa: Nom, YYYY-MM-DD, HH:MM`\n"
-                         "💡 G'oya qo'shish: Shunchaki matn yozing\n"
-                         "📂 G'oyalarni ko'rish: /ideas")
+    welcome_text = (
+        "🌟 **Aqlli hayot yordamchisiga xush kelibsiz!**\n\n"
+        "Men sizga vaqtingizni unumli boshqarish va g'oyalaringizni tartibga solishda yordam beraman.\n\n"
+        "🚀 **Imkoniyatlarim:**\n"
+        "1️⃣ **Vazifalar:** Shunchaki 'Ertaga 10:00da uchrashuv' deb yozing yoki ovozli xabar yuboring. Men uni Google Calendar-ga qo'shaman.\n"
+        "2️⃣ **Missiyalar:** Vaqtini aytmasangiz, men uni 'Kunlik missiya' sifatida belgilayman.\n"
+        "3️⃣ **G'oyalar:** Shunchaki fikrlaringizni yozing, men ularni bazaga saqlayman.\n\n"
+        "🛠 **Asosiy buyruqlar:**\n"
+        "📅 /list — Kelgusi 15 kunlik rejalarni ko'rish\n"
+        "💡 /ideas — Barcha saqlangan g'oyalar ro'yxati\n\n"
+        "Sizga qanday yordam bera olaman?"
+    )
+    await message.answer(welcome_text, parse_mode="Markdown")
 
-@dp.message(Command("list"))
+
 async def cmd_list(message: types.Message):
     builder = InlineKeyboardBuilder()
     now = datetime.now()
@@ -58,46 +67,37 @@ async def process_list_callback(callback: types.CallbackQuery):
     
     if not events:
         builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
-        await callback.message.edit_text(f"📅 {date_str} kuni uchun hech qanday reja topilmadi.", reply_markup=builder.as_markup())
+        await callback.message.edit_text(f"📅 {date_str} kuni uchun reja yo'q.", reply_markup=builder.as_markup())
         return
 
-    timed_tasks = []    # Vaqtli vazifalar
-    daily_missions = [] # Kunlik missiyalar (vaqtsiz)
+    timed_tasks = []    
+    daily_missions = [] 
     
     for event in events:
         summary = event.get('summary', 'Vazifa')
         event_id = event['id']
-        start = event['start'].get('dateTime', event['start'].get('date'))
+        start_node = event.get('start', {})
         
-        # O'chirish tugmasiga ID va joriy sanani birga biriktiramiz
+        # O'chirish tugmasi
         builder.row(types.InlineKeyboardButton(
             text=f"❌ {summary[:20]}...", 
             callback_data=f"del_{event_id}_{date_str}")
         )
         
-        # Vaqtli vazifa yoki Missiyani 'T' harfi orqali ajratamiz
-        if 'T' in start:
-            time_part = start.split('T')[1][:5] 
+        # dateTime bo'lsa - VAQTLI, faqat date bo'lsa - KUNLIK MISSIA
+        if 'dateTime' in start_node:
+            time_part = start_node['dateTime'].split('T')[1][:5] 
             timed_tasks.append(f"🕒 {time_part} — {summary}")
         else:
             daily_missions.append(f"📌 {summary}")
 
-    # Yagona va tushunarli hisobot shakllantirish
-    res = f"📅 **{date_str} rejalar hisoboti:**\n\n"
-    
-    if timed_tasks:
-        res += "⌛ **VAQTLI VAZIFALAR:**\n" + "\n".join(timed_tasks) + "\n\n"
-    else:
-        res += "⌛ **VAQTLI VAZIFALAR:**\n(Bo'sh)\n\n"
-    
-    if daily_missions:
-        res += "📋 **KUNLIK MISSIYALAR (Vaqtsiz):**\n" + "\n".join(daily_missions)
-    else:
-        res += "📋 **KUNLIK MISSIYALAR:**\n(Bo'sh)"
+    # Yagona hisobot (Report)
+    res = f"📅 **{date_str} hisoboti:**\n\n"
+    res += "⌛ **VAQTLI VAZIFALAR:**\n" + ("\n".join(timed_tasks) if timed_tasks else "(Bo'sh)") + "\n\n"
+    res += "📋 **KUNLIK MISSIYALAR:**\n" + ("\n".join(daily_missions) if daily_missions else "(Bo'sh)")
 
     builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
     await callback.message.edit_text(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
-    await callback.answer()
 
 # 2. Vazifa o'chirilgandan so'ng darhol o'sha kunni refresh qilish
 @dp.callback_query(F.data.startswith("del_"))
