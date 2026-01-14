@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from config import BOT_TOKEN
 import processor
 import google_service
-from database import init_db, save_idea, get_all_ideas
+from database import init_db, save_idea, get_ideas, delete_idea
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime, timedelta
@@ -155,21 +155,7 @@ async def delete_event_handler(callback: types.CallbackQuery):
         print(f"Delete Error: {e}")
         await callback.answer("❌ O'chirishda xatolik yuz berdi", show_alert=True)
 
-# 3. IDEAS buyrug'i (Matndan tepada bo'lishi shart)
-@dp.message(Command("ideas"))
-async def show_ideas(message: types.Message):
-    ideas = get_all_ideas()
-    if not ideas:
-        await message.answer("Hozircha g'oyalar yo'q.")
-        return
-    
-    response = "📝 **Sizning g'oyalaringiz:**\n\n"
-    for i, (content, cat) in enumerate(ideas, 1):
-        # Buyruqlarni bazadan chiqarib tashlash (agar adashib tushgan bo'lsa)
-        if content.startswith('/'): continue
-        response += f"{i}. {content} (_{cat}_)\n"
-    await message.answer(response, parse_mode="Markdown")
-    
+   
 @dp.message(Command("ideas"))
 async def list_ideas(message: types.Message):
     from database import get_ideas
@@ -222,138 +208,101 @@ async def process_delete_idea(callback: types.CallbackQuery):
 # 4. Ovozli xabarlar
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
-    # 1. Status xabari
-    status_msg = await message.answer("🎤 Ovoz eshitilmoqda...")
+    # 1. Yuklanayotganini bildirish uchun status xabari
+    status_msg = await message.answer("🎤 Ovozli xabar qabul qilindi...")
     
     file_id = message.voice.file_id
     file = await bot.get_file(file_id)
     file_path = f"{file_id}.ogg"
     
     try:
-        # 2. Faylni yuklab olish
+        # 2. Ovozli faylni yuklab olish
         await bot.download_file(file.file_path, file_path)
         
-        # 3. Ovozni matnga o'girish (TEXT o'zgaruvchisi shu yerda yaratiladi)
-        await status_msg.edit_text("✍️ Matnga o'girilmoqda...")
-        text = processor.transcribe_voice(file_path) # <--- MUHIM
-        
-        # 4. AI orqali tahlil qilish
-        await status_msg.edit_text("🧠 Tahlil qilinmoqda...")
-        result = processor.process_text_with_ai(text)
-        
-        # 5. Vaqtni aniqlashtirish tekshiruvi
-        if result['type'] == 'task' and result['time'] == "NEED_CLARIFICATION":
-            await status_msg.edit_text(
-                f"🧐 Vazifani tushundim: **{result['content']}**\n\n"
-                "Lekin soat nechaligini bilolmadim. Iltimos, vaqtini ayta olasizmi?"
-            )
-            return
-
-        # 6. Vazifa yoki G'oya sifatida saqlash
-        if result['type'] == 'task':
-            google_service.add_event(result['content'], result['date'], result['time'])
-            await status_msg.edit_text(f"✅ Vazifa qo'shildi:\n📌 {result['content']}\n🕒 {result['date']} | {result['time']}")
-        else:
-            from database import save_idea
-            save_idea(result['content'], result['category'])
-            await status_msg.edit_text(f"💡 G'oya saqlandi:\n📌 {result['content']}")
-
-    except Exception as e:
-        print(f"Ovozli xabar xatosi: {e}")
-        await status_msg.edit_text("❌ Kechirasiz, ovozni qayta ishlashda xatolik yuz berdi.")
-    
-    finally:
-        # Faylni o'chirish
-        if os.path.exists(file_path):
-            os.remove(file_path)    # 1. Yuklanayotganini bildirish
-    status_msg = await message.answer("🎤 Ovozli xabar eshitilmoqda...")
-    result = processor.process_text_with_ai(text)
-    # 2. Ovozli faylni yuklab olish
-    file_id = message.voice.file_id
-    file = await bot.get_file(file_id)
-    file_path = f"{file_id}.ogg"
-    await bot.download_file(file.file_path, file_path)
-
-    if result['type'] == 'task':
-            if result['time'] == "NEED_CLARIFICATION":
-                await status_msg.edit_text(
-                    f"🧐 Vazifani tushundim: **{result['content']}**\n\n"
-                    "Lekin soat nechaligini anglay olmadim. Iltimos, vaqtini aniqroq ayta olasizmi? "
-                    "(Masalan: 'soat 10 da' yoki 'kechki 7 da')"
-                )
-                return # Calendar-ga qo'shmasdan to'xtatamiz
-            
-            # Agar hammasi aniq bo'lsa qo'shish
-            google_service.add_event(result['content'], result['date'], result['time'])
-            await status_msg.edit_text(
-                f"✅ Vazifa qo'shildi:\n📌 {result['content']}\n"
-                f"📅 {result['date']} | ⏰ {result['time']}"
-            )
-    
-    try:
-        # 3. Groq orqali ovozni matnga o'girish (Whisper)
+        # 3. Groq Whisper orqali ovozni matnga o'girish
         await status_msg.edit_text("✍️ Matnga o'girilmoqda...")
         text = processor.transcribe_voice(file_path)
         
-        # 4. Groq orqali matnni tahlil qilish (Llama)
+        if not text:
+            await status_msg.edit_text("❌ Ovozdan matn ajratib bo'lmadi.")
+            return
+
+        # 4. AI orqali matnni tahlil qilish
         await status_msg.edit_text("🧠 Tahlil qilinmoqda...")
         result = processor.process_text_with_ai(text)
         
-        # 5. Natijaga qarab ish tutish
-        if result['type'] == 'task':
-            google_service.add_event(result['content'], result['date'], result['time'])
+        # 5. Natijaga qarab ish tutish (Vazifa yoki G'oya)
+        if result.get('type') == 'task':
+            content = result.get('content')
+            date_val = result.get('date')
+            time_val = result.get('time')
+            description = result.get('description', "")
+
+            # Vaqtni aniqlashtirish kerakmi?
+            if time_val == "NEED_CLARIFICATION":
+                await status_msg.edit_text(
+                    f"🧐 Vazifani tushundim: **{content}**\n\n"
+                    "Lekin soat nechaligini anglay olmadim. Iltimos, vaqtini yozib yuboring."
+                )
+                return
+
+            # Google Calendar-ga qo'shish
+            google_service.add_event(content, date_val, time_val, description)
+            
+            time_display = f"⏰ {time_val}" if time_val and time_val != "null" else "📅 Kun bo'yi"
             await status_msg.edit_text(
-                f"✅ Ovozli vazifa qo'shildi:\n📌 {result['content']}\n"
-                f"📅 {result['date']} | ⏰ {result['time']}"
+                f"✅ Ovozli vazifa qo'shildi:\n📌 {content}\n"
+                f"🕒 {date_val} | {time_display}"
             )
+        
         else:
+            # G'oya sifatida saqlash
             from database import save_idea
-            save_idea(result['content'], result['category'])
+            save_idea(result['content'], result.get('category', 'General'))
             await status_msg.edit_text(f"💡 G'oya saqlandi:\n📌 {result['content']}")
             
     except Exception as e:
-        await status_msg.edit_text(f"❌ Kechirasiz, tushunolmadim: {e}")
+        print(f"Ovozli xabar xatosi: {e}")
+        await status_msg.edit_text(f"❌ Xatolik yuz berdi: {e}")
+        
     finally:
         # Vaqtinchalik faylni o'chirish
         if os.path.exists(file_path):
-            os.remove(file_path)    # Ovozli xabar mantiqi shu yerda qoladi...
-    # Hozircha OpenAI puli yo'qligi uchun xato berishi mumkin
-    await message.answer("Ovozli xizmat ertaga (to'lovdan so'ng) ishga tushadi.")
-
+            os.remove(file_path)
 # 5. MATNLI xabarlar (Eng pastda bo'lishi shart!)
 @dp.message(F.text & ~F.command)
 async def handle_text(message: types.Message):
     user_input = message.text 
     
     try:
+        # AI tahlili
         result = processor.process_text_with_ai(user_input)
         
+        # 1. Vazifa (task) bo'lsa
         if result.get('type') == 'task':
             content = result.get('content')
             date_val = result.get('date')
             time_val = result.get('time')
             desc = result.get('description', "")
 
-            # Endi 4 ta argument yuboramiz, google_service uni qabul qiladi
+            # Google Calendar-ga yuborish
             google_service.add_event(content, date_val, time_val, desc)
             
-            # Xabarni chiroyli chiqarish
-            time_msg = f"⏰ {time_val}" if time_val and time_val != "null" else "📅 Kun bo'yi (Missiya)"
-            desc_msg = f"\n📝 Tavsif: {desc}" if desc else ""
-            
+            time_msg = f"⏰ {time_val}" if time_val and time_val != "null" else "📅 Kun bo'yi"
             await message.answer(
-                f"✅ Vazifa qo'shildi:\n📌 {content}\n"
-                f"🕒 {date_val} | {time_msg}{desc_msg}"
+                f"✅ Vazifa qo'shildi:\n📌 {content}\n🕒 {date_val} | {time_msg}"
             )
-        else:
+            
+        # 2. G'oya (idea) bo'lsa
+        elif result.get('type') == 'idea':
             from database import save_idea
+            # G'oya matnini to'liq saqlash
             save_idea(result['content'], result.get('category', 'General'))
             await message.answer(f"💡 G'oya saqlandi:\n📌 {result['content']}")
 
     except Exception as e:
         print(f"Xato: {e}")
-        await message.answer("❌ Xabarni tahlil qilishda xatolik yuz berdi.")
-
+        await message.answer("❌ Xatolik yuz berdi. Qayta urinib ko'ring.")
 
 
 async def main():
