@@ -23,8 +23,7 @@ def get_calendar_service():
 def get_events_for_date(target_date):
     service = get_calendar_service()
     
-    # Tashkent vaqti bilan kunning boshi va oxiri
-    # Z (UTC) o'rniga aniq vaqt oralig'ini belgilaymiz
+    # O'zbekiston vaqti (+05:00) bo'yicha kunning boshi va oxiri
     time_min = f"{target_date}T00:00:00+05:00"
     time_max = f"{target_date}T23:59:59+05:00"
     
@@ -38,34 +37,46 @@ def get_events_for_date(target_date):
     
     return events_result.get('items', [])
 
+    
 def add_event(summary, date_str, time_str, description=""):
     service = get_calendar_service()
     
-    # 1. Sanani tekshirish
     if not date_str or date_str == "null":
         date_str = datetime.now().strftime("%Y-%m-%d")
 
-    # Baza ko'rinishidagi event
     event = {
         'summary': summary,
-        'description': description if description else "", # Tavsif bo'lsa qo'shadi
+        'description': description if description else "",
     }
 
-    # 2. VAQTNI TEKSHIRISH (Siz aytgan kunlik missiya mantiqi)
+    # VAQTNI TEKSHIRISH
     if time_str and time_str != "null" and time_str != "NEED_CLARIFICATION":
-        # Vaqt bor bo'lsa - Aniq soatli vazifa
         start_time = f"{date_str}T{time_str}:00"
         start_dt = datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%S")
         end_dt = start_dt + timedelta(hours=1)
         
         event['start'] = {'dateTime': start_dt.isoformat(), 'timeZone': 'Asia/Tashkent'}
         event['end'] = {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Tashkent'}
+        
+        # BILDIRISHNOMALAR (1h, 5h, 12h oldin)
+        event['reminders'] = {
+            'useDefault': False,
+            'overrides': [
+                {'method': 'popup', 'minutes': 60},    # 1 soat oldin
+                {'method': 'popup', 'minutes': 300},   # 5 soat oldin
+                {'method': 'popup', 'minutes': 720},   # 12 soat oldin
+            ],
+        }
     else:
-        # Vaqt yo'q bo'lsa - KUNLIK MISSIYA (All day event)
+        # Kunlik missiya (Muddat/Deadline uchun ham shu ishlaydi)
         event['start'] = {'date': date_str}
         event['end'] = {'date': date_str}
+        
+        # Kunlik missiyalar uchun bildirishnomalar odatda ishlamaydi, 
+        # lekin Google Calendar orqali standart 9:00 dagi eslatmani yoqish mumkin
+        event['reminders'] = {'useDefault': True}
 
-    return service.events().insert(calendarId='primary', body=event).execute()    
+    return service.events().insert(calendarId='primary', body=event).execute()
 
 def delete_event(event_id):
     service = get_calendar_service()

@@ -13,31 +13,37 @@ def process_text_with_ai(user_text):
     prompt = f"""
 Today is {today}.
 Rules:
-1. If the text is an idea, thought, or reflection, return "type": "idea".
-2. If the text is an action, task, or command (e.g., "do", "go", "buy", "remind"), return "type": "task".
-3. For "idea" types, DO NOT shorten the content. Keep all original details but optimize the grammar.
-4. If there is a link, put it in the "description".
+1. If text is an idea, return "type": "idea".
+2. If text is an action, return "type": "task".
+3. **PRETTIFY IDEAS**: 
+   - Use bold headers (e.g., 💡 **IDEA NAME**).
+   - Use bullet points for details.
+   - Separate links or references clearly.
+   - Do NOT shorten the content, just make it look like a professional report.
+4. Return ONLY a JSON object.
 
-Return ONLY a JSON object:
+JSON Format:
 {{
     "type": "idea" or "task",
-    "content": "Full detailed content of the message",
-    "description": "Any links or extra info",
+    "content": "Professional Markdown formatted text",
+    "description": "Extra links or metadata",
     "date": "{today}",
     "time": "HH:MM" or null,
-    "category": "category name"
+    "category": "category"
 }}
-""" # Mana bu yerda triple-quote yopilishi shart
+"""
 
     try:
+        # AIga foydalanuvchi matnini aniq ko'rsatamiz
         chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt + f"\n\nUser text: {user_text}"}],
+            messages=[{"role": "user", "content": prompt + f"\n\nUser's Original Text: {user_text}"}],
             model="llama-3.3-70b-versatile",
             response_format={"type": "json_object"}
         )
         return json.loads(chat_completion.choices[0].message.content)
     except Exception as e:
         print(f"AI Error: {e}")
+        # Xatolik yuz bersa, matnni asl holicha qaytaramiz
         return {"type": "idea", "content": user_text, "category": "General", "date": today, "time": None}
 
 def transcribe_voice(file_path):

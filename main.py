@@ -37,25 +37,18 @@ async def cmd_start(message: types.Message):
     await message.answer(welcome_text, parse_mode="Markdown")
 
 
+@dp.message(Command("list"))
 async def cmd_list(message: types.Message):
     builder = InlineKeyboardBuilder()
     now = datetime.now()
-    
-    # Bugundan boshlab kelgusi 15 kun uchun tugmalar
+    # 15 kunlik ro'yxatni yaratish...
     for i in range(15):
         day = now + timedelta(days=i)
         date_str = day.strftime("%Y-%m-%d")
-        
-        # Tugma yorlig'ini chiroyli qilish
-        if i == 0: label = "Bugun"
-        elif i == 1: label = "Ertaga"
-        else: label = day.strftime("%d-%b") # Masalan: 15-Jan
-        
+        label = "Bugun" if i == 0 else "Ertaga" if i == 1 else day.strftime("%d-%b")
         builder.button(text=f"📅 {label}", callback_data=f"list_{date_str}")
-    
-    builder.adjust(3) # Tugmalarni 3 qatordan terish
+    builder.adjust(3)
     await message.answer("🗓 Qaysi kun rejalarini ko'rmoqchisiz?", reply_markup=builder.as_markup())
-
 
 # 1. Vazifalar va Missiyalarni ajratilgan bitta hisobotda ko'rsatish
 @dp.callback_query(F.data.startswith("list_"))
@@ -67,7 +60,7 @@ async def process_list_callback(callback: types.CallbackQuery):
     
     if not events:
         builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
-        await callback.message.edit_text(f"📅 {date_str} kuni uchun reja yo'q.", reply_markup=builder.as_markup())
+        await callback.message.edit_text(f"📅 {date_str} kuni uchun reja topilmadi.", reply_markup=builder.as_markup())
         return
 
     timed_tasks = []    
@@ -78,45 +71,45 @@ async def process_list_callback(callback: types.CallbackQuery):
         event_id = event['id']
         start_node = event.get('start', {})
         
-        # O'chirish tugmasi
+        # O'chirish tugmasi (ID va sanani birga saqlaymiz)
         builder.row(types.InlineKeyboardButton(
             text=f"❌ {summary[:20]}...", 
             callback_data=f"del_{event_id}_{date_str}")
         )
         
-        # dateTime bo'lsa - VAQTLI, faqat date bo'lsa - KUNLIK MISSIA
+        # 'dateTime' bo'lsa - VAQTLI, 'date' bo'lsa - KUNLIK MISSIYA
         if 'dateTime' in start_node:
-            time_part = start_node['dateTime'].split('T')[1][:5] 
+            time_part = start_node['dateTime'].split('T')[1][:5]
             timed_tasks.append(f"🕒 {time_part} — {summary}")
         else:
             daily_missions.append(f"📌 {summary}")
 
-    # Yagona hisobot (Report)
-    res = f"📅 **{date_str} hisoboti:**\n\n"
+    res = f"📅 **{date_str} rejalar hisoboti:**\n\n"
     res += "⌛ **VAQTLI VAZIFALAR:**\n" + ("\n".join(timed_tasks) if timed_tasks else "(Bo'sh)") + "\n\n"
     res += "📋 **KUNLIK MISSIYALAR:**\n" + ("\n".join(daily_missions) if daily_missions else "(Bo'sh)")
 
     builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
     await callback.message.edit_text(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await callback.answer()
+
 
 # 2. Vazifa o'chirilgandan so'ng darhol o'sha kunni refresh qilish
 @dp.callback_query(F.data.startswith("del_"))
 async def delete_event_handler(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     event_id = parts[1]
-    current_date = parts[2] # Sanani saqlab qolamiz
+    current_date = parts[2] # Sanani callback_data'dan olamiz
     
     try:
         google_service.delete_event(event_id)
-        await callback.answer("✅ Vazifa muvaffaqiyatli o'chirildi")
+        await callback.answer("✅ O'chirildi")
         
-        # Eski menyuga qaytmasdan, o'sha kunning ro'yxatini qayta yuklaymiz
+        # O'sha kunning ro'yxatini qayta yuklaymiz (Instant Refresh)
         callback.data = f"list_{current_date}"
         await process_list_callback(callback)
-        
     except Exception as e:
-        print(f"O'chirish xatosi: {e}")
-        await callback.answer("❌ O'chirishda xato yuz berdi", show_alert=True)
+        await callback.answer("❌ Xatolik!")
+
 
 @dp.callback_query(F.data == "back_to_list")
 async def back_to_list_menu(callback: types.CallbackQuery):
@@ -193,6 +186,7 @@ async def list_ideas(message: types.Message):
     
     # DIQQAT: reply_markup tugmalarni Telegramga yuboradi
     await message.answer(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
 
 
 @dp.callback_query(F.data.startswith("delidea_"))
