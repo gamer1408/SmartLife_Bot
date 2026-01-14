@@ -1,3 +1,5 @@
+import os
+import json
 import os.path
 from datetime import datetime, timedelta
 from google.auth.transport.requests import Request
@@ -8,16 +10,27 @@ from config import SCOPES
 
 def get_calendar_service():
     creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
+    # 1. Muhit o'zgaruvchisidan tokenlarni tekshirish
+    google_token = os.getenv('GOOGLE_TOKEN_JSON')
+    if google_token:
+        token_data = json.loads(google_token)
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+    
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            # 2. Muhit o'zgaruvchisidan credentials.json matnini olish
+            creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            if not creds_json:
+                raise FileNotFoundError("GOOGLE_CREDENTIALS_JSON muhit o'zgaruvchisi topilmadi!")
+            
+            # Matnni vaqtinchalik faylga yozish yoki to'g'ridan-to'g'ri ishlatish
+            creds_dict = json.loads(creds_json)
+            flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+            
     return build('calendar', 'v3', credentials=creds)
 
 def get_events_for_date(target_date):
@@ -37,7 +50,7 @@ def get_events_for_date(target_date):
     
     return events_result.get('items', [])
 
-    
+
 def add_event(summary, date_str, time_str, description=""):
     service = get_calendar_service()
     
