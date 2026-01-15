@@ -12,21 +12,20 @@ def process_text_with_ai(user_text):
     # Matnni aniq chegaralash va JSON formatini qat'iylashtirish
     prompt = f"""
 Today is {today}.
-Instruction: Analyze the text and strictly categorize it.
 Rules:
-1. If the text contains a specific date, time, or mentions a deadline (e.g., "15-yanvar", "Deadline", "Ertaga", "due date"), it MUST be "type": "task".
-2. If the text describes an action to be done (e.g., "buy", "go", "call", "send"), it is a "task".
-3. If the text is general information, a plan without a specific date, or a thought, it is an "idea".
-4. For IDEAS: Do NOT shorten or summarize the content. Optimize it for clarity while keeping ALL original details.
+1. If the text contains keywords like "deadline", "muddat", "sana", or "date", ALWAYS set "type": "task".
+2. If it is a general thought or information without a timeline, set "type": "idea".
+3. **DO NOT SHORTEN IDEAS**: Keep full details for ideas, but format them nicely.
+4. For tasks: Extract the deadline date into "date". If no specific time is mentioned, set "time": null.
 
 Return ONLY JSON:
 {{
     "type": "task" or "idea",
-    "content": "Short title for task OR full detailed text for idea",
-    "description": "Any additional links or full details for tasks",
+    "content": "Professional Title",
+    "description": "Full details and links",
     "date": "YYYY-MM-DD",
     "time": "HH:MM" or null,
-    "category": "category name"
+    "category": "category"
 }}
 """
 

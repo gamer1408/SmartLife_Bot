@@ -10,7 +10,7 @@ from config import SCOPES
 
 def get_calendar_service():
     creds = None
-    # 1. Avval tokenni Environment Variable'dan tekshirish
+    # Render Environment Variables orqali o'qish
     google_token = os.getenv('GOOGLE_TOKEN_JSON')
     if google_token:
         creds = Credentials.from_authorized_user_info(json.loads(google_token), SCOPES)
@@ -19,18 +19,16 @@ def get_calendar_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # 2. credentials.json matnini o'zgaruvchidan olish
             creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
             if not creds_json:
                 raise FileNotFoundError("GOOGLE_CREDENTIALS_JSON topilmadi!")
             
-            flow = InstalledAppFlow.from_client_config(json.loads(creds_json), SCOPES)
-            # Renderda brauzer ochib bo'lmaydi, shuning uchun bu qism xato beradi
-            # Siz lokalda olingan token.json ni GOOGLE_TOKEN_JSON ga qo'yishingiz shart
-            raise PermissionError("Lokal token.json matnini GOOGLE_TOKEN_JSON o'zgaruvchisiga qo'ying!")
+            creds_dict = json.loads(creds_json)
+            flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
+            # Muhim: Renderda buni ishlatish uchun avval lokalda token olish kerak
+            raise PermissionError("Lokal token.json matnini GOOGLE_TOKEN_JSON ga qo'ying!")
             
     return build('calendar', 'v3', credentials=creds)
-
 
 def get_events_for_date(target_date):
     service = get_calendar_service()
