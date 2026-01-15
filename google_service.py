@@ -11,25 +11,28 @@ from config import SCOPES
 def get_calendar_service():
     creds = None
     
-    # 1. Muhit o'zgaruvchisidan tokenlarni tekshirish
+    # 1. Avval mavjud tokenni (token.json o'rniga) Environment Variable'dan tekshirish
     google_token = os.getenv('GOOGLE_TOKEN_JSON')
     if google_token:
-        token_data = json.loads(google_token)
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-    
+        try:
+            token_data = json.loads(google_token)
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        except Exception as e:
+            print(f"Token error: {e}")
+
+    # 2. Agar token yo'q bo'lsa yoki yaroqsiz bo'lsa
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # 2. Muhit o'zgaruvchisidan credentials.json matnini olish
-            creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-            if not creds_json:
-                raise FileNotFoundError("GOOGLE_CREDENTIALS_JSON muhit o'zgaruvchisi topilmadi!")
-            
-            # Matnni vaqtinchalik faylga yozish yoki to'g'ridan-to'g'ri ishlatish
-            creds_dict = json.loads(creds_json)
-            flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
-            creds = flow.run_local_server(port=0)
+        # credentials.json fayli o'rniga Environment Variable matnini ishlatish
+        creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        if not creds_json:
+            raise FileNotFoundError("GOOGLE_CREDENTIALS_JSON o'zgaruvchisi topilmadi!")
+        
+        creds_dict = json.loads(creds_json)
+        # Fayl nomisiz bevosita lug'at (dict) orqali flow yaratish
+        flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
+        # Renderda brauzer ochib bo'lmaydi, shuning uchun bu qism 
+        # faqat lokalda bir marta ishlatib olingan tokenni talab qiladi
+        raise PermissionError("Lokalda token.json yarating va uni GOOGLE_TOKEN_JSON ga qo'ying!")
             
     return build('calendar', 'v3', credentials=creds)
 
