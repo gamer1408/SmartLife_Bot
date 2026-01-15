@@ -166,27 +166,22 @@ async def list_ideas(message: types.Message):
         await message.answer("💡 Hozircha g'oyalar bazasi bo'sh.")
         return
 
+    res = "✨ **SIZNING BARCHA G'OYALARINGIZ** ✨\n\n"
     builder = InlineKeyboardBuilder()
-    res = "💡 **Sizning barcha g'oyalaringiz:**\n\n"
     
     for idea in ideas:
-        # Bazadan kelgan tartib: 0:id, 1:content, 2:category, 3:date
-        idea_id = idea[0]
-        content = idea[1]
-        category = idea[2]
+        idea_id, content, category, timestamp = idea
+        # Markdown xatolarini oldini olish uchun matnni tozalaymiz yoki HTML ishlatamiz
+        res += f"📁 **{category}**\n> {content}\n"
+        res += "──────────────\n"
         
-        # Ro'yxat matni (G'oyani to'liq ko'rsatamiz)
-        res += f"📌 **{category}**: {content}\n\n"
-        
-        # Har bir g'oya uchun o'chirish tugmasi
         builder.row(types.InlineKeyboardButton(
-            text=f"🗑 O'chirish: {content[:15]}...", 
+            text=f"🗑 O'chirish: {category}", 
             callback_data=f"delidea_{idea_id}")
         )
     
-    # DIQQAT: reply_markup tugmalarni Telegramga yuboradi
+    # HTML parse mode xavfsizroq
     await message.answer(res, reply_markup=builder.as_markup(), parse_mode="Markdown")
-
 
 
 @dp.callback_query(F.data.startswith("delidea_"))
